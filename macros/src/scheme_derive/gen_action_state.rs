@@ -24,9 +24,10 @@ pub fn generate_action_state(parsed: &ParsedScheme) -> syn::Result<TokenStream> 
     let modify_basis_config_branches = commands.iter().map(gen_modify_basis_config_branch);
 
     let (serde_derives, serde_attr) = parsed.gen_serde_clauses_if_set();
+    let rollback_derives = parsed.gen_rollback_derives();
 
     Ok(quote! {
-        #[derive(#serde_derives)]
+        #[derive(#rollback_derives #serde_derives)]
         #serde_attr
         #vis enum #action_state_enum_name {
             #(

@@ -24,7 +24,7 @@ use serde::{Deserialize, Serialize};
 /// being fed, it'll apply extra gravity to shorten the jump. If the game desires fixed height
 /// jumps instead (where the player cannot make lower jumps by tapping the jump button)
 /// [`shorten_extra_gravity`](TnuaBuiltinJumpConfig::shorten_extra_gravity) should be set to `0.0`.
-#[derive(Default)]
+#[derive(Default, Clone, PartialEq, Debug)]
 #[cfg_attr(feature = "serialize", derive(Serialize, Deserialize))]
 pub struct TnuaBuiltinJump {
     /// In addition to the upward motion, add a vertical component to the jump so that the peak of
@@ -44,7 +44,7 @@ pub struct TnuaBuiltinJump {
     pub force_forward: Option<Dir3>,
 }
 
-#[derive(Clone, Serialize, Deserialize)]
+#[derive(Clone, PartialEq, Debug, Serialize, Deserialize)]
 pub struct TnuaBuiltinJumpConfig {
     /// The height the character will jump to.
     ///
@@ -176,7 +176,7 @@ impl TnuaBuiltinJumpConfig {
     }
 }
 
-#[derive(Default)]
+#[derive(Default, Clone, PartialEq, Debug)]
 #[cfg_attr(feature = "serialize", derive(Serialize, Deserialize))]
 pub enum TnuaBuiltinJumpMemory {
     #[default]

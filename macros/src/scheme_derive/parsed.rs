@@ -13,6 +13,7 @@ pub struct ParsedScheme<'a> {
     pub action_state_enum_name: syn::Ident,
     pub basis: syn::Type,
     pub serde: Option<proc_macro2::Span>,
+    pub rollback: Option<proc_macro2::Span>,
     pub config_ext: Option<syn::Type>,
     pub commands: Vec<ParsedCommand<'a>>,
 }
@@ -28,6 +29,7 @@ impl<'a> ParsedScheme<'a> {
             action_state_enum_name: ident_with_suffix(&ast.ident, "ActionState"),
             basis: attr_on_enum.basis,
             serde: attr_on_enum.serde,
+            rollback: attr_on_enum.rollback,
             config_ext: attr_on_enum.config_ext,
             commands: data_enum
                 .variants
@@ -42,6 +44,18 @@ impl<'a> ParsedScheme<'a> {
             self.gen_serde_clauses_always()
         } else {
             (quote! {}, quote! {})
+        }
+    }
+
+    /// Derives required for the generated action state enum to participate in rollback (clone into
+    /// history, structural equality for dedup, and debug formatting). Empty unless `#[scheme(rollback)]`.
+    pub fn gen_rollback_derives(&self) -> proc_macro2::TokenStream {
+        if let Some(span) = self.rollback {
+            quote_spanned! {span=>
+                Clone, PartialEq, Debug,
+            }
+        } else {
+            quote! {}
         }
     }
 
@@ -62,6 +76,7 @@ impl<'a> ParsedScheme<'a> {
 struct AttrOnEnum {
     basis: syn::Type,
     serde: Option<proc_macro2::Span>,
+    rollback: Option<proc_macro2::Span>,
     config_ext: Option<syn::Type>,
 }
 
@@ -69,6 +84,7 @@ impl AttrOnEnum {
     fn new(ast: &syn::DeriveInput) -> syn::Result<Self> {
         let mut basis: Option<syn::Type> = None;
         let mut serde: Option<proc_macro2::Span> = None;
+        let mut rollback: Option<proc_macro2::Span> = None;
         let mut config_ext: Option<syn::Type> = None;
         for arg in AttrArg::iter_in_list_attributes(&ast.attrs, "scheme")? {
             match arg.name().to_string().as_str() {
@@ -80,6 +96,12 @@ impl AttrOnEnum {
                     arg.apply_flag_to_field(
                         &mut serde,
                         "serializing and deserializing the entire state",
+                    )?;
+                }
+                "rollback" => {
+                    arg.apply_flag_to_field(
+                        &mut rollback,
+                        "deriving Clone/PartialEq/Debug on the action state for rollback",
                     )?;
                 }
                 "config_ext" => {
@@ -94,6 +116,7 @@ impl AttrOnEnum {
                 "Scheme is missing basis (`#[scheme(basis = ...)])`",
             ))?,
             serde,
+            rollback,
             config_ext,
         })
     }

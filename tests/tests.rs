@@ -75,6 +75,43 @@ fn scheme_with_all_actions() {
 }
 
 #[test]
+fn rollback_scheme_is_clone_eq_debug() {
+    // `#[scheme(rollback)]` makes the generated action-state enum derive Clone/PartialEq/Debug, so
+    // the whole `TnuaController` satisfies the bounds a rollback crate needs to store, dedup, and
+    // restore it. This mirrors the obligations of `register_predicted_component`.
+    #[derive(TnuaScheme, Clone, PartialEq, Debug)]
+    #[scheme(basis = TnuaBuiltinWalk, rollback)]
+    #[allow(dead_code)]
+    enum RollbackScheme {
+        Jump(TnuaBuiltinJump),
+        Crouch(TnuaBuiltinCrouch),
+    }
+
+    fn assert_clone_eq_debug<T: Clone + PartialEq + std::fmt::Debug>() {}
+    assert_clone_eq_debug::<TnuaController<RollbackScheme>>();
+
+    let mut controller = TnuaController::<RollbackScheme>::default();
+    controller.initiate_action_feeding();
+    controller.basis = TnuaBuiltinWalk {
+        desired_motion: Vector3::X,
+        desired_forward: Some(Dir3::Z),
+    };
+    controller.action(RollbackScheme::Jump(Default::default()));
+
+    let snapshot = controller.clone();
+    assert_eq!(snapshot, controller, "a fresh clone must equal its source");
+    let _ = format!("{controller:?}");
+
+    // Divergence anywhere in the controller's state must be observable through `PartialEq` -
+    // otherwise a rollback crate would wrongly dedup a changed tick.
+    controller.basis.desired_motion = Vector3::Y;
+    assert_ne!(
+        snapshot, controller,
+        "a basis-input change must make the controllers unequal"
+    );
+}
+
+#[test]
 fn scheme_with_no_actions() {
     #[derive(TnuaScheme)]
     #[scheme(basis = TnuaBuiltinWalk)]

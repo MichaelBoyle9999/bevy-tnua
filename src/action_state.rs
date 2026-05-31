@@ -29,6 +29,44 @@ impl<A: TnuaAction<B>, B: TnuaBasis> TnuaActionState<A, B> {
     }
 }
 
+impl<A: TnuaAction<B> + Clone, B: TnuaBasis> Clone for TnuaActionState<A, B>
+where
+    A::Config: Clone,
+    A::Memory: Clone,
+{
+    fn clone(&self) -> Self {
+        Self {
+            input: self.input.clone(),
+            config: self.config.clone(),
+            memory: self.memory.clone(),
+        }
+    }
+}
+
+impl<A: TnuaAction<B> + PartialEq, B: TnuaBasis> PartialEq for TnuaActionState<A, B>
+where
+    A::Config: PartialEq,
+    A::Memory: PartialEq,
+{
+    fn eq(&self, other: &Self) -> bool {
+        self.input == other.input && self.config == other.config && self.memory == other.memory
+    }
+}
+
+impl<A: TnuaAction<B> + std::fmt::Debug, B: TnuaBasis> std::fmt::Debug for TnuaActionState<A, B>
+where
+    A::Config: std::fmt::Debug,
+    A::Memory: std::fmt::Debug,
+{
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("TnuaActionState")
+            .field("input", &self.input)
+            .field("config", &self.config)
+            .field("memory", &self.memory)
+            .finish()
+    }
+}
+
 #[doc(hidden)]
 pub trait TnuaActionStateInterface<B: TnuaBasis> {
     fn apply(

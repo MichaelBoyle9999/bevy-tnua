@@ -20,7 +20,7 @@ use crate::{TnuaBasisContext, TnuaMotor, TnuaVelChange};
 
 use super::walk_sensors::TnuaBuiltinWalkSensors;
 
-#[derive(Default)]
+#[derive(Default, Clone, PartialEq, Debug)]
 #[cfg_attr(feature = "serialize", derive(Serialize, Deserialize))]
 pub struct TnuaBuiltinWalk {
     /// The direction (in the world space) and speed to accelerate to.
@@ -35,7 +35,7 @@ pub struct TnuaBuiltinWalk {
     pub desired_forward: Option<Dir3>,
 }
 
-#[derive(Clone, Serialize, Deserialize)]
+#[derive(Clone, PartialEq, Debug, Serialize, Deserialize)]
 pub struct TnuaBuiltinWalkConfig {
     // How fast the character will go.
     //
@@ -131,7 +131,7 @@ pub struct TnuaBuiltinWalkConfig {
 
 /// Definition for an upward-facing proximity sensor that checks for obstacles above the
 /// character's "head".
-#[derive(Clone, Serialize, Deserialize)]
+#[derive(Clone, PartialEq, Debug, Serialize, Deserialize)]
 pub struct TnuaBuiltinWalkHeadroom {
     /// Disnce from the collider's center to its top.
     pub distance_to_collider_top: Float,
@@ -174,14 +174,14 @@ impl Default for TnuaBuiltinWalkConfig {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 #[cfg_attr(feature = "serialize", derive(Serialize, Deserialize))]
 struct StandingOnState {
     entity: Entity,
     entity_linvel: Vector3,
 }
 
-#[derive(Default, Debug)]
+#[derive(Default, Debug, Clone, PartialEq)]
 #[cfg_attr(feature = "serialize", derive(Serialize, Deserialize))]
 pub struct TnuaBuiltinWalkMemory {
     airborne_timer: Option<Timer>,

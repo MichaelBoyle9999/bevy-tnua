@@ -10,11 +10,11 @@ use crate::{
 };
 use crate::{TnuaMotor, TnuaVelChange};
 
-#[derive(Debug, Default)]
+#[derive(Debug, Default, Clone, PartialEq)]
 #[cfg_attr(feature = "serialize", derive(Serialize, Deserialize))]
 pub struct TnuaBuiltinCrouch;
 
-#[derive(Clone, Serialize, Deserialize)]
+#[derive(Clone, PartialEq, Debug, Serialize, Deserialize)]
 pub struct TnuaBuiltinCrouchConfig {
     /// Controls how low the character will crouch, compared to its regular float offset while
     /// standing.
@@ -47,7 +47,7 @@ impl Default for TnuaBuiltinCrouchConfig {
     }
 }
 
-#[derive(Default, Debug)]
+#[derive(Default, Debug, Clone, PartialEq)]
 #[cfg_attr(feature = "serialize", derive(Serialize, Deserialize))]
 pub enum TnuaBuiltinCrouchMemory {
     /// The character is transitioning from standing to crouching.

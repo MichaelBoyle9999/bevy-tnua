@@ -5,7 +5,7 @@ use bevy::prelude::*;
 
 /// An indication that a character was knocked back and "struggles" to get back to its original
 /// velocity.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq)]
 #[cfg_attr(feature = "serialize", derive(serde::Serialize, serde::Deserialize))]
 pub struct VelocityBoundary {
     base: Float,

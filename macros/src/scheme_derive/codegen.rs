@@ -28,6 +28,7 @@ fn generate_main_trait(parsed: &ParsedScheme) -> syn::Result<TokenStream> {
         action_state_enum_name,
         basis,
         serde: _,
+        rollback: _,
         commands,
         config_ext: _,
     } = parsed;

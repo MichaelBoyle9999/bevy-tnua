@@ -75,6 +75,7 @@ impl<S: TnuaScheme> Plugin for TnuaControllerPlugin<S> {
     }
 }
 
+#[derive(Clone, PartialEq, Debug)]
 #[cfg_attr(feature = "serialize", derive(Serialize, Deserialize))]
 struct ContenderAction<S: TnuaScheme> {
     action: S,
@@ -106,7 +107,7 @@ impl FedStatus {
     }
 }
 
-#[derive(Default, Debug)]
+#[derive(Default, Debug, Clone, PartialEq)]
 #[cfg_attr(feature = "serialize", derive(Serialize, Deserialize))]
 struct FedEntry {
     status: FedStatus,
@@ -206,8 +207,72 @@ impl<S: TnuaScheme> Default for TnuaController<S> {
     }
 }
 
+impl<S: TnuaScheme + Clone> Clone for TnuaController<S>
+where
+    S::Basis: Clone,
+    <S::Basis as TnuaBasis>::Config: Clone,
+    <S::Basis as TnuaBasis>::Memory: Clone,
+    S::ActionState: Clone,
+{
+    fn clone(&self) -> Self {
+        Self {
+            basis: self.basis.clone(),
+            basis_config: self.basis_config.clone(),
+            basis_memory: self.basis_memory.clone(),
+            actions_being_fed: self.actions_being_fed.clone(),
+            contender_action: self.contender_action.clone(),
+            action_flow_status: self.action_flow_status.clone(),
+            up_direction: self.up_direction,
+            action_feeding_initiated: self.action_feeding_initiated,
+            current_action: self.current_action.clone(),
+        }
+    }
+}
+
+impl<S: TnuaScheme + PartialEq> PartialEq for TnuaController<S>
+where
+    S::Basis: PartialEq,
+    <S::Basis as TnuaBasis>::Config: PartialEq,
+    <S::Basis as TnuaBasis>::Memory: PartialEq,
+    S::ActionState: PartialEq,
+{
+    fn eq(&self, other: &Self) -> bool {
+        self.basis == other.basis
+            && self.basis_config == other.basis_config
+            && self.basis_memory == other.basis_memory
+            && self.actions_being_fed == other.actions_being_fed
+            && self.contender_action == other.contender_action
+            && self.action_flow_status == other.action_flow_status
+            && self.up_direction == other.up_direction
+            && self.action_feeding_initiated == other.action_feeding_initiated
+            && self.current_action == other.current_action
+    }
+}
+
+impl<S: TnuaScheme + std::fmt::Debug> std::fmt::Debug for TnuaController<S>
+where
+    S::Basis: std::fmt::Debug,
+    <S::Basis as TnuaBasis>::Config: std::fmt::Debug,
+    <S::Basis as TnuaBasis>::Memory: std::fmt::Debug,
+    S::ActionState: std::fmt::Debug,
+{
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("TnuaController")
+            .field("basis", &self.basis)
+            .field("basis_config", &self.basis_config)
+            .field("basis_memory", &self.basis_memory)
+            .field("actions_being_fed", &self.actions_being_fed)
+            .field("contender_action", &self.contender_action)
+            .field("action_flow_status", &self.action_flow_status)
+            .field("up_direction", &self.up_direction)
+            .field("action_feeding_initiated", &self.action_feeding_initiated)
+            .field("current_action", &self.current_action)
+            .finish()
+    }
+}
+
 /// The result of [`TnuaController::action_flow_status()`].
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, Default, PartialEq)]
 #[cfg_attr(feature = "serialize", derive(Serialize, Deserialize))]
 pub enum TnuaActionFlowStatus<D: TnuaActionDiscriminant> {
     /// No action is going on.
