@@ -214,7 +214,7 @@ fn update_proximity_sensors_system(
                     mut entity_is_not_platform,
                 )) = other_object_query.get(entity)
                 else {
-                    return false;
+                    return;
                 };
 
                 if let Some(collider_of) = entity_collider_of {
@@ -222,7 +222,7 @@ fn update_proximity_sensors_system(
 
                     // Collider is child of our rigid body. ignore.
                     if parent_entity == owner_entity {
-                        return true;
+                        return;
                     }
 
                     if let Ok((
@@ -247,7 +247,7 @@ fn update_proximity_sensors_system(
                 }
 
                 if entity_is_not_platform {
-                    return true;
+                    return;
                 }
 
                 let entity_linvel;
@@ -299,12 +299,15 @@ fn update_proximity_sensors_system(
                     if let Some(ghost_sensor) = ghost_sensor.as_mut() {
                         ghost_sensor.0.push(sensor_output);
                     }
-                    true
-                } else if entity_is_sensor || excluded_by_collision_layers() {
-                    true
-                } else {
+                } else if !entity_is_sensor
+                    && !excluded_by_collision_layers()
+                    && final_sensor_output.as_ref().is_none_or(
+                        |nearest: &TnuaProximitySensorOutput| {
+                            sensor_output.proximity < nearest.proximity
+                        },
+                    )
+                {
                     final_sensor_output = Some(sensor_output);
-                    false
                 }
             };
 
@@ -333,7 +336,8 @@ fn update_proximity_sensors_system(
                             intersection_point: shape_hit_data.point1,
                             normal: Dir3::new(shape_hit_data.normal1.extend(0.0).f32())
                                 .unwrap_or_else(|_| -cast_direction),
-                        })
+                        });
+                        true
                     },
                 );
             } else {
@@ -352,9 +356,20 @@ fn update_proximity_sensors_system(
                                     * cast_direction_2d.adjust_precision(),
                             normal: Dir3::new(ray_hit_data.normal.extend(0.0).f32())
                                 .unwrap_or_else(|_| -cast_direction),
-                        })
+                        });
+                        true
                     },
                 );
+            }
+            if let Some(ghost_sensor) = ghost_sensor.as_mut() {
+                if let Some(nearest) = final_sensor_output.as_ref() {
+                    ghost_sensor
+                        .0
+                        .retain(|ghost_hit| ghost_hit.proximity < nearest.proximity);
+                }
+                ghost_sensor
+                    .0
+                    .sort_by(|a, b| a.proximity.total_cmp(&b.proximity));
             }
             sensor.output = final_sensor_output;
         },
