@@ -68,6 +68,12 @@ impl<S: TnuaScheme> Plugin for TnuaControllerPlugin<S> {
         );
         app.add_systems(
             self.schedule,
+            prepare_sensors_system::<S>
+                .before(TnuaPipelineSystems::Sensors)
+                .in_set(TnuaSystems),
+        );
+        app.add_systems(
+            self.schedule,
             (apply_ghost_overwrites::<S>, apply_controller_system::<S>)
                 .chain()
                 .in_set(TnuaPipelineSystems::Logic),
@@ -665,6 +671,59 @@ fn apply_ghost_overwrites<S: TnuaScheme>(
     }
 }
 
+fn basis_config_for<S: TnuaScheme>(
+    controller: &TnuaController<S>,
+    config: &S::Config,
+) -> <S::Basis as TnuaBasis>::Config {
+    let mut basis_config = config.basis_config().clone();
+    if let Some(current_action) = controller.current_action.as_ref() {
+        current_action.modify_basis_config(&mut basis_config);
+    }
+    basis_config
+}
+
+#[allow(clippy::type_complexity)]
+fn prepare_sensors_system<S: TnuaScheme>(
+    mut query: Query<(
+        Entity,
+        &TnuaController<S>,
+        &TnuaConfig<S>,
+        &mut TnuaSensorsEntities<S>,
+        Option<&TnuaToggle>,
+        Has<TnuaGhostOverwrites<S>>,
+    )>,
+    proximity_sensors_query: Query<(&TnuaProximitySensor, Has<TnuaGhostSensor>)>,
+    config_assets: Res<Assets<S::Config>>,
+    mut commands: Commands,
+) {
+    for (
+        controller_entity,
+        controller,
+        config_handle,
+        mut sensors_entities,
+        tnua_toggle,
+        has_ghost_overwrites,
+    ) in query.iter_mut()
+    {
+        if let TnuaToggle::Disabled = tnua_toggle.copied().unwrap_or_default() {
+            continue;
+        }
+        let Some(config) = config_assets.get(&config_handle.0) else {
+            continue;
+        };
+        S::Basis::get_or_create_sensors(
+            controller.up_direction.unwrap_or(Dir3::Y),
+            &basis_config_for(controller, config),
+            &controller.basis_memory,
+            &mut sensors_entities.as_mut().sensors_entities,
+            &proximity_sensors_query,
+            controller_entity,
+            &mut commands,
+            has_ghost_overwrites,
+        );
+    }
+}
+
 #[allow(clippy::type_complexity)]
 fn apply_controller_system<S: TnuaScheme>(
     time: Res<Time>,
@@ -707,13 +766,7 @@ fn apply_controller_system<S: TnuaScheme>(
         let Some(config) = config_assets.get(&config_handle.0) else {
             continue;
         };
-        controller.basis_config = Some({
-            let mut basis_config = config.basis_config().clone();
-            if let Some(current_action) = controller.current_action.as_ref() {
-                current_action.modify_basis_config(&mut basis_config);
-            }
-            basis_config
-        });
+        controller.basis_config = Some(basis_config_for(controller, config));
         let basis_config = controller
             .basis_config
             .as_ref()
