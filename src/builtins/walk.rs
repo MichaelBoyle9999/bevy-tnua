@@ -184,7 +184,8 @@ struct StandingOnState {
 #[derive(Default, Debug, Clone, PartialEq)]
 #[cfg_attr(feature = "serialize", derive(Serialize, Deserialize))]
 pub struct TnuaBuiltinWalkMemory {
-    airborne_timer: Option<Timer>,
+    /// The coyote timer started when the character left the ground, or `None` while it stands on it.
+    pub airborne_timer: Option<Timer>,
     /// The current distance of the character from the distance its supposed to float at.
     pub standing_offset: Vector3,
     standing_on: Option<StandingOnState>,
