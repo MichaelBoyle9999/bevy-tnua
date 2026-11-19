@@ -10,6 +10,7 @@ mod spatial_ext;
 
 use avian3d::{prelude::*, schedule::PhysicsStepSystems};
 use bevy::ecs::schedule::{InternedScheduleLabel, ScheduleLabel};
+use bevy::ecs::system::SystemParam;
 use bevy::prelude::*;
 use bevy_tnua_physics_integration_layer::math::AsF32;
 use bevy_tnua_physics_integration_layer::math::Float;
@@ -29,7 +30,9 @@ use bevy_tnua_physics_integration_layer::data_for_backends::{
 use bevy_tnua_physics_integration_layer::obstacle_radar::TnuaObstacleRadar;
 
 pub mod prelude {
-    pub use crate::{TnuaAvian3dPlugin, TnuaAvian3dSensorShape, TnuaSpatialExtAvian3d};
+    pub use crate::{
+        TnuaAvian3dPlugin, TnuaAvian3dSensorCasts, TnuaAvian3dSensorShape, TnuaSpatialExtAvian3d,
+    };
 }
 
 /// Add this plugin to use avian3d as a physics backend.
@@ -132,41 +135,223 @@ fn update_rigid_body_trackers_system(
     }
 }
 
+/// How a hit along a proximity sensor's cast counts.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum SensedHitKind {
+    Ground,
+    Ghost,
+}
+
 #[allow(clippy::type_complexity)]
+struct SensedHit<'a> {
+    kind: SensedHitKind,
+    kinematic_data: Option<(
+        &'a Position,
+        &'a LinearVelocity,
+        &'a AngularVelocity,
+        Option<&'a RigidBody>,
+    )>,
+}
+
+/// The casts [`TnuaProximitySensor`]s sense their surroundings with, and the rule that decides
+/// which hits along them count as ground.
+///
+/// Use [`ground_proximity_along_ray`](Self::ground_proximity_along_ray) to find the ground a
+/// sensor would count along a ray, such as under its cast origin when it casts a shape.
+#[derive(SystemParam)]
+pub struct TnuaAvian3dSensorCasts<'w, 's> {
+    spatial_query: SpatialQuery<'w, 's>,
+    #[allow(clippy::type_complexity)]
+    owner_query: Query<
+        'w,
+        's,
+        (
+            &'static Position,
+            &'static Rotation,
+            Option<&'static Collider>,
+            Option<&'static TnuaAvian3dSensorShape>,
+            Option<&'static TnuaToggle>,
+        ),
+    >,
+    collision_layers_query: Query<'w, 's, &'static CollisionLayers>,
+    #[allow(clippy::type_complexity)]
+    other_object_query: Query<
+        'w,
+        's,
+        (
+            Option<(
+                &'static Position,
+                &'static LinearVelocity,
+                &'static AngularVelocity,
+                Option<&'static RigidBody>,
+            )>,
+            Option<&'static CollisionLayers>,
+            Option<&'static ColliderOf>,
+            Has<TnuaGhostPlatform>,
+            Has<Sensor>,
+            Has<TnuaNotPlatform>,
+        ),
+    >,
+}
+
+impl TnuaAvian3dSensorCasts<'_, '_> {
+    /// The distance, along a ray from `sensor`'s cast origin in its cast direction and within its
+    /// cast range, to the nearest hit `sensor` would count as ground for `owner`.
+    pub fn ground_proximity_along_ray(
+        &self,
+        owner: Entity,
+        sensor: &TnuaProximitySensor,
+    ) -> Option<Float> {
+        let (position, rotation, collider, _, _) = self.owner_query.get(owner).ok()?;
+        let cast_origin = cast_origin(position, rotation, collider, sensor);
+        let owner_layers = self.owner_layers(owner);
+        let mut nearest: Option<Float> = None;
+        self.ray_hits(owner, cast_origin, sensor, |ray_hit_data| {
+            if self
+                .classify_hit(owner, owner_layers, ray_hit_data.entity)
+                .is_some_and(|hit| hit.kind == SensedHitKind::Ground)
+            {
+                nearest = Some(nearest.map_or(ray_hit_data.distance, |nearest| {
+                    nearest.min(ray_hit_data.distance)
+                }));
+            }
+        });
+        nearest
+    }
+
+    fn owner_layers(&self, owner: Entity) -> CollisionLayers {
+        self.collision_layers_query
+            .get(owner)
+            .ok()
+            .copied()
+            .unwrap_or_default()
+    }
+
+    fn ray_hits(
+        &self,
+        owner: Entity,
+        cast_origin: Vector3,
+        sensor: &TnuaProximitySensor,
+        mut callback: impl FnMut(RayHitData),
+    ) {
+        self.spatial_query.ray_hits_callback(
+            cast_origin,
+            sensor.cast_direction,
+            sensor.cast_range,
+            true,
+            &query_filter(owner),
+            |ray_hit_data| {
+                callback(ray_hit_data);
+                true
+            },
+        );
+    }
+
+    fn classify_hit(
+        &self,
+        owner: Entity,
+        owner_layers: CollisionLayers,
+        entity: Entity,
+    ) -> Option<SensedHit<'_>> {
+        let Ok((
+            mut kinematic_data,
+            mut collision_layers,
+            collider_of,
+            mut is_ghost,
+            mut is_sensor,
+            mut is_not_platform,
+        )) = self.other_object_query.get(entity)
+        else {
+            return None;
+        };
+
+        if let Some(collider_of) = collider_of {
+            let parent_entity = collider_of.body;
+
+            // Collider is child of our rigid body. ignore.
+            if parent_entity == owner {
+                return None;
+            }
+
+            if let Ok((
+                parent_kinematic_data,
+                parent_collision_layers,
+                _,
+                parent_is_ghost,
+                parent_is_sensor,
+                parent_is_not_platform,
+            )) = self.other_object_query.get(parent_entity)
+            {
+                if kinematic_data.is_none() {
+                    kinematic_data = parent_kinematic_data;
+                }
+                if collision_layers.is_none() {
+                    collision_layers = parent_collision_layers;
+                }
+                is_ghost = is_ghost || parent_is_ghost;
+                is_sensor = is_sensor || parent_is_sensor;
+                is_not_platform = is_not_platform || parent_is_not_platform;
+            }
+        }
+
+        if is_not_platform {
+            return None;
+        }
+
+        let kind = if is_ghost {
+            SensedHitKind::Ghost
+        } else if !is_sensor
+            && owner_layers.interacts_with(collision_layers.copied().unwrap_or_default())
+        {
+            SensedHitKind::Ground
+        } else {
+            return None;
+        };
+        Some(SensedHit {
+            kind,
+            kinematic_data,
+        })
+    }
+}
+
+fn query_filter(owner: Entity) -> SpatialQueryFilter {
+    SpatialQueryFilter::from_excluded_entities([owner])
+}
+
+fn cast_origin(
+    position: &Position,
+    rotation: &Rotation,
+    collider: Option<&Collider>,
+    sensor: &TnuaProximitySensor,
+) -> Vector3 {
+    let transform = Transform {
+        translation: position.0.f32(),
+        rotation: rotation.0.f32(),
+        scale: collider
+            .map(|collider| collider.scale().f32())
+            .unwrap_or(Vec3::ONE),
+    };
+
+    // TODO: is there any point in doing these transformations as f64 when that feature
+    // flag is active?
+    transform
+        .transform_point(sensor.cast_origin.f32())
+        .adjust_precision()
+}
+
 fn update_proximity_sensors_system(
-    spatial_query: SpatialQuery,
+    casts: TnuaAvian3dSensorCasts,
     mut sensor_query: Query<(
         &mut TnuaProximitySensor,
         &TnuaSensorOf,
         Option<&TnuaAvian3dSensorShape>,
         Option<&mut TnuaGhostSensor>,
     )>,
-    owner_query: Query<(
-        &Position,
-        &Rotation,
-        Option<&Collider>,
-        Option<&TnuaAvian3dSensorShape>,
-        Option<&TnuaToggle>,
-    )>,
-    collision_layers_query: Query<&CollisionLayers>,
-    other_object_query: Query<(
-        Option<(
-            &Position,
-            &LinearVelocity,
-            &AngularVelocity,
-            Option<&RigidBody>,
-        )>,
-        Option<&CollisionLayers>,
-        Option<&ColliderOf>,
-        Has<TnuaGhostPlatform>,
-        Has<Sensor>,
-        Has<TnuaNotPlatform>,
-    )>,
 ) {
     sensor_query.par_iter_mut().for_each(
         |(mut sensor, &TnuaSensorOf(owner_entity), shape, mut ghost_sensor)| {
             let Ok((position, rotation, collider, owner_shape, tnua_toggle)) =
-                owner_query.get(owner_entity)
+                casts.owner_query.get(owner_entity)
             else {
                 return;
             };
@@ -176,19 +361,8 @@ fn update_proximity_sensors_system(
                 TnuaToggle::SenseOnly => {}
                 TnuaToggle::Enabled => {}
             }
-            let transform = Transform {
-                translation: position.0.f32(),
-                rotation: rotation.0.f32(),
-                scale: collider
-                    .map(|collider| collider.scale().f32())
-                    .unwrap_or(Vec3::ONE),
-            };
 
-            // TODO: is there any point in doing these transformations as f64 when that feature
-            // flag is active?
-            let cast_origin = transform
-                .transform_point(sensor.cast_origin.f32())
-                .adjust_precision();
+            let cast_origin = cast_origin(position, rotation, collider, &*sensor);
             let cast_direction = sensor.cast_direction;
 
             struct CastResult {
@@ -198,7 +372,7 @@ fn update_proximity_sensors_system(
                 normal: Dir3,
             }
 
-            let collision_layers = collision_layers_query.get(owner_entity).ok();
+            let owner_layers = casts.owner_layers(owner_entity);
 
             let mut final_sensor_output = None;
             if let Some(ghost_sensor) = ghost_sensor.as_mut() {
@@ -212,50 +386,13 @@ fn update_proximity_sensors_system(
                     normal,
                 } = cast_result;
 
-                let Ok((
-                    mut entity_kinematic_data,
-                    mut entity_collision_layers,
-                    entity_collider_of,
-                    mut entity_is_ghost,
-                    mut entity_is_sensor,
-                    mut entity_is_not_platform,
-                )) = other_object_query.get(entity)
+                let Some(SensedHit {
+                    kind,
+                    kinematic_data,
+                }) = casts.classify_hit(owner_entity, owner_layers, entity)
                 else {
                     return;
                 };
-
-                if let Some(collider_of) = entity_collider_of {
-                    let parent_entity = collider_of.body;
-
-                    // Collider is child of our rigid body. ignore.
-                    if parent_entity == owner_entity {
-                        return;
-                    }
-
-                    if let Ok((
-                        parent_kinematic_data,
-                        parent_collision_layers,
-                        _,
-                        parent_is_ghost,
-                        parent_is_sensor,
-                        parent_is_not_platform,
-                    )) = other_object_query.get(parent_entity)
-                    {
-                        if entity_kinematic_data.is_none() {
-                            entity_kinematic_data = parent_kinematic_data;
-                        }
-                        if entity_collision_layers.is_none() {
-                            entity_collision_layers = parent_collision_layers;
-                        }
-                        entity_is_ghost = entity_is_ghost || parent_is_ghost;
-                        entity_is_sensor = entity_is_sensor || parent_is_sensor;
-                        entity_is_not_platform = entity_is_not_platform || parent_is_not_platform;
-                    }
-                }
-
-                if entity_is_not_platform {
-                    return;
-                }
 
                 let entity_linvel;
                 let entity_angvel;
@@ -264,7 +401,7 @@ fn update_proximity_sensors_system(
                     entity_linear_velocity,
                     entity_angular_velocity,
                     rigid_body,
-                )) = entity_kinematic_data
+                )) = kinematic_data
                 {
                     if rigid_body == Some(&RigidBody::Static) {
                         entity_angvel = Vector3::ZERO;
@@ -295,30 +432,24 @@ fn update_proximity_sensors_system(
                     entity_angvel,
                 };
 
-                let excluded_by_collision_layers = || {
-                    let collision_layers = collision_layers.copied().unwrap_or_default();
-                    let entity_collision_layers =
-                        entity_collision_layers.copied().unwrap_or_default();
-                    !collision_layers.interacts_with(entity_collision_layers)
-                };
-
-                if entity_is_ghost {
-                    if let Some(ghost_sensor) = ghost_sensor.as_mut() {
-                        ghost_sensor.0.push(sensor_output);
+                match kind {
+                    SensedHitKind::Ghost => {
+                        if let Some(ghost_sensor) = ghost_sensor.as_mut() {
+                            ghost_sensor.0.push(sensor_output);
+                        }
                     }
-                } else if !entity_is_sensor
-                    && !excluded_by_collision_layers()
-                    && final_sensor_output.as_ref().is_none_or(
-                        |nearest: &TnuaProximitySensorOutput| {
-                            sensor_output.proximity < nearest.proximity
-                        },
-                    )
-                {
-                    final_sensor_output = Some(sensor_output);
+                    SensedHitKind::Ground => {
+                        if final_sensor_output.as_ref().is_none_or(
+                            |nearest: &TnuaProximitySensorOutput| {
+                                sensor_output.proximity < nearest.proximity
+                            },
+                        ) {
+                            final_sensor_output = Some(sensor_output);
+                        }
+                    }
                 }
             };
 
-            let query_filter = SpatialQueryFilter::from_excluded_entities([owner_entity]);
             if let Some(TnuaAvian3dSensorShape(shape)) = shape {
                 // TODO: can I bake `owner_rotation` into
                 // `sensor.cast_shape_rotation`?
@@ -328,7 +459,7 @@ fn update_proximity_sensors_system(
                         .to_scaled_axis()
                         .dot(cast_direction.adjust_precision()),
                 );
-                spatial_query.shape_hits_callback(
+                casts.spatial_query.shape_hits_callback(
                     shape,
                     cast_origin,
                     owner_rotation.mul_quat(sensor.cast_shape_rotation.adjust_precision()),
@@ -338,7 +469,7 @@ fn update_proximity_sensors_system(
                         ignore_origin_penetration: true,
                         ..default()
                     },
-                    &query_filter,
+                    &query_filter(owner_entity),
                     |shape_hit_data| {
                         apply_cast(CastResult {
                             entity: shape_hit_data.entity,
@@ -351,24 +482,16 @@ fn update_proximity_sensors_system(
                     },
                 );
             } else {
-                spatial_query.ray_hits_callback(
-                    cast_origin,
-                    cast_direction,
-                    sensor.cast_range,
-                    true,
-                    &query_filter,
-                    |ray_hit_data| {
-                        apply_cast(CastResult {
-                            entity: ray_hit_data.entity,
-                            proximity: ray_hit_data.distance,
-                            intersection_point: cast_origin
-                                + ray_hit_data.distance * cast_direction.adjust_precision(),
-                            normal: Dir3::new(ray_hit_data.normal.f32())
-                                .unwrap_or_else(|_| -cast_direction),
-                        });
-                        true
-                    },
-                );
+                casts.ray_hits(owner_entity, cast_origin, &*sensor, |ray_hit_data| {
+                    apply_cast(CastResult {
+                        entity: ray_hit_data.entity,
+                        proximity: ray_hit_data.distance,
+                        intersection_point: cast_origin
+                            + ray_hit_data.distance * cast_direction.adjust_precision(),
+                        normal: Dir3::new(ray_hit_data.normal.f32())
+                            .unwrap_or_else(|_| -cast_direction),
+                    });
+                });
             }
             if let Some(ghost_sensor) = ghost_sensor.as_mut() {
                 if let Some(nearest) = final_sensor_output.as_ref() {
