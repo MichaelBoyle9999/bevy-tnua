@@ -153,13 +153,31 @@ struct SensedHit<'a> {
     )>,
 }
 
-/// The casts [`TnuaProximitySensor`]s sense their surroundings with, and the rule that decides
-/// which hits along them count as ground.
+/// The ground a [`TnuaProximitySensor`] would count along a ray, by the rule its casts sense
+/// with.
 ///
-/// Use [`ground_proximity_along_ray`](Self::ground_proximity_along_ray) to find the ground a
-/// sensor would count along a ray, such as under its cast origin when it casts a shape.
+/// Use [`ground_proximity_along_ray`](Self::ground_proximity_along_ray) to find it, such as
+/// under a sensor's cast origin when it casts a shape.
 #[derive(SystemParam)]
 pub struct TnuaAvian3dSensorCasts<'w, 's> {
+    casts: SensorCasts<'w, 's>,
+    sensor_query: Query<'w, 's, (&'static TnuaProximitySensor, &'static TnuaSensorOf)>,
+}
+
+impl TnuaAvian3dSensorCasts<'_, '_> {
+    /// The distance, along a ray from `sensor`'s cast origin in its cast direction and within its
+    /// cast range, to the nearest hit `sensor` would count as ground for the entity it senses
+    /// for. `None` when no hit counts, or `sensor` is no positioned entity's sensor.
+    pub fn ground_proximity_along_ray(&self, sensor: Entity) -> Option<Float> {
+        let (sensor, &TnuaSensorOf(owner)) = self.sensor_query.get(sensor).ok()?;
+        self.casts.ground_proximity_along_ray(owner, sensor)
+    }
+}
+
+/// The casts [`TnuaProximitySensor`]s sense their surroundings with, and the rule that decides
+/// which hits along them count as ground.
+#[derive(SystemParam)]
+struct SensorCasts<'w, 's> {
     spatial_query: SpatialQuery<'w, 's>,
     #[allow(clippy::type_complexity)]
     owner_query: Query<
@@ -194,10 +212,8 @@ pub struct TnuaAvian3dSensorCasts<'w, 's> {
     >,
 }
 
-impl TnuaAvian3dSensorCasts<'_, '_> {
-    /// The distance, along a ray from `sensor`'s cast origin in its cast direction and within its
-    /// cast range, to the nearest hit `sensor` would count as ground for `owner`.
-    pub fn ground_proximity_along_ray(
+impl SensorCasts<'_, '_> {
+    fn ground_proximity_along_ray(
         &self,
         owner: Entity,
         sensor: &TnuaProximitySensor,
@@ -340,7 +356,7 @@ fn cast_origin(
 }
 
 fn update_proximity_sensors_system(
-    casts: TnuaAvian3dSensorCasts,
+    casts: SensorCasts,
     mut sensor_query: Query<(
         &mut TnuaProximitySensor,
         &TnuaSensorOf,
